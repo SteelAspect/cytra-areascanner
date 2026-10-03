@@ -1,0 +1,32 @@
+# Gradle
+build/
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Fabric / Loom
+run/
+remappedSrc/
+
+# IntelliJ / Eclipse / VS Code
+out/
+.idea/
+*.iml
+*.ipr
+*.iws
+.classpath
+.project
+.settings/
+bin/
+.vscode/
+
+# Built jars outside build/
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Personal config
+config/
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
