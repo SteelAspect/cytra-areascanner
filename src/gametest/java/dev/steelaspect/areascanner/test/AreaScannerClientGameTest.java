@@ -159,6 +159,30 @@ public class AreaScannerClientGameTest implements FabricClientGameTest {
             LOG.info("Screenshot: {}", context.takeScreenshot(TestScreenshotOptions.of("presets")));
             context.runOnClient(client -> client.setScreen(null));
 
+            // Pending chunks: a box far outside the client's view distance is pending until it loads.
+            BlockPos far = o.offset(480, 0, 0);
+            world.getServer().runCommand("forceload add " + far.getX() + " " + far.getZ());
+            context.waitTicks(20);
+            cmd(world, "setblock %s crying_obsidian", far);
+            world.getServer().runCommand("forceload remove " + far.getX() + " " + far.getZ());
+            context.runOnClient(client -> {
+                AreaSelection sel = DataManager.getSelectionManager().getCurrentSelection();
+                sel.addSubRegionBox(new Box(far.offset(-1, 0, -1), far.offset(1, 1, 1), "far"), false);
+                ScanManager.start();
+            });
+            context.waitTicks(5);
+            context.runOnClient(client -> check("far box pending (" + ScanManager.pendingChunks() + ")",
+                    ScanManager.pendingChunks() > 0 && ScanManager.count(Category.UNMOVABLE) == 3));
+            world.getServer().runCommand(String.format(Locale.ROOT, "tp @p %d %d %d", far.getX(), far.getY() + 3, far.getZ() + 3));
+            for (int i = 0; i < 40; i++) {
+                context.waitTicks(10);
+                boolean done = context.computeOnClient(client -> ScanManager.pendingChunks() == 0 && !ScanManager.isScanning());
+                if (done) break;
+            }
+            context.runOnClient(client -> check("far box scanned after load: pending " + ScanManager.pendingChunks()
+                    + ", unmovable " + ScanManager.count(Category.UNMOVABLE),
+                    ScanManager.pendingChunks() == 0 && ScanManager.count(Category.UNMOVABLE) == 4));
+
             context.runOnClient(client -> {
                 ScanManager.stop(true);
                 check("stopped clears matches", !ScanManager.isActive() && ScanManager.totalMatches() == 0);

@@ -278,7 +278,7 @@ public final class ScanManager {
                 job.started = true;
                 QUEUED_CHUNKS.remove(job.chunkKey);
             }
-            if (!lvl.hasChunk(job.cx, job.cz)) {
+            if (!isLoaded(lvl, job.cx, job.cz)) {
                 // Not loaded: remember it and scan it when it loads.
                 PENDING_CHUNKS.add(job.chunkKey);
                 doneBlocks += job.remaining();
@@ -301,6 +301,11 @@ public final class ScanManager {
         }
     }
 
+    /** ClientLevel.hasChunk always returns true, so ask the chunk cache directly. */
+    private static boolean isLoaded(ClientLevel lvl, int cx, int cz) {
+        return lvl.getChunkSource().hasChunk(cx, cz);
+    }
+
     private static void processDirty(ClientLevel lvl) {
         long[] positions;
         synchronized (DIRTY) {
@@ -311,7 +316,7 @@ public final class ScanManager {
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         for (long packed : positions) {
             pos.set(packed);
-            if (!lvl.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) continue;
+            if (!isLoaded(lvl, pos.getX() >> 4, pos.getZ() >> 4)) continue;
             set(packed, Matcher.match(lvl.getBlockState(pos), lvl, pos));
         }
     }

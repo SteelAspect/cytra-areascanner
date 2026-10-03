@@ -118,7 +118,8 @@ public final class ScanRenderer implements IRenderer {
         int version = ScanManager.version();
         if (version == this.cachedVersion && merge == this.cachedMerge) return;
         long now = System.currentTimeMillis();
-        long interval = ScanManager.isScanning() ? REBUILD_INTERVAL_SCANNING_MS : REBUILD_INTERVAL_MS;
+        // Rebuilding is O(matches); with very large match sets rebuild less often.
+        long interval = (ScanManager.isScanning() ? REBUILD_INTERVAL_SCANNING_MS : REBUILD_INTERVAL_MS) + ScanManager.totalMatches() / 2000;
         if (merge == this.cachedMerge && this.cachedVersion != -1 && now - this.lastRebuild < interval) return;
         this.lastRebuild = now;
         this.cachedVersion = version;
