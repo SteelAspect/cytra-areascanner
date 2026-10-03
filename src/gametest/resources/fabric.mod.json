@@ -7,7 +7,8 @@
   "environment": "client",
   "entrypoints": {
     "fabric-client-gametest": [
-      "dev.steelaspect.areascanner.test.AreaScannerClientGameTest"
+      "dev.steelaspect.areascanner.test.AreaScannerClientGameTest",
+      "dev.steelaspect.areascanner.test.MenuScreenshotsGameTest"
     ]
   },
   "depends": {
