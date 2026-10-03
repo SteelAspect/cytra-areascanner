@@ -16,7 +16,7 @@
   "cytra-areascanner.config.comment.chatExportLimit": "Maximum coordinates listed per group when exporting to chat.\nThe clipboard export always contains every match.",
   "cytra-areascanner.config.name.unmovableEnabled": "Unmovable",
   "cytra-areascanner.config.prettyName.unmovableEnabled": "Unmovable",
-  "cytra-areascanner.config.comment.unmovableEnabled": "Highlight blocks a piston can't push: obsidian, bedrock, portals, beacons, spawners, command blocks,\nextended pistons, piston heads, moving pistons, and anything indestructible or with push reaction BLOCK.",
+  "cytra-areascanner.config.comment.unmovableEnabled": "Highlight blocks a piston can't push: obsidian, portals, beacons, spawners, command blocks,\nextended pistons, piston heads, moving pistons, and anything indestructible or with push reaction BLOCK.\nBedrock is left out (add it to the custom list to scan for it).",
   "cytra-areascanner.config.name.unmovableBlockEntities": "All Block Entities",
   "cytra-areascanner.config.prettyName.unmovableBlockEntities": "  All Block Entities",
   "cytra-areascanner.config.comment.unmovableBlockEntities": "Also count every block with a block entity (chests, furnaces, hoppers, signs, ...),\nsince pistons can't move those either.",

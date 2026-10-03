@@ -27,7 +27,7 @@ public final class Matcher {
 
     /** Blocks that are always unmovable, regardless of how the generic checks see them. */
     private static final Set<Block> UNMOVABLE_BLOCKS = new ReferenceOpenHashSet<>(new Block[]{
-            Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN, Blocks.BEDROCK, Blocks.REINFORCED_DEEPSLATE,
+            Blocks.OBSIDIAN, Blocks.CRYING_OBSIDIAN, Blocks.REINFORCED_DEEPSLATE,
             Blocks.END_PORTAL_FRAME, Blocks.END_PORTAL, Blocks.END_GATEWAY, Blocks.NETHER_PORTAL,
             Blocks.RESPAWN_ANCHOR, Blocks.ENCHANTING_TABLE, Blocks.ENDER_CHEST, Blocks.BEACON,
             Blocks.SPAWNER, Blocks.TRIAL_SPAWNER, Blocks.VAULT, Blocks.BARRIER, Blocks.LIGHT,
@@ -104,6 +104,8 @@ public final class Matcher {
     /** Mirrors the checks in PistonBaseBlock.isPushable, plus the explicit list. */
     private static boolean isUnmovable(BlockState state, BlockGetter level, BlockPos pos, boolean blockEntities) {
         Block block = state.getBlock();
+        // Bedrock floors/ceilings would swamp the results; it only shows up if it's on the custom list.
+        if (block == Blocks.BEDROCK) return false;
         if (UNMOVABLE_BLOCKS.contains(block)) return true;
         if (block instanceof PistonBaseBlock) {
             return state.getValue(PistonBaseBlock.EXTENDED);

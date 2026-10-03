@@ -4,12 +4,14 @@ Client-side Fabric mod for **Minecraft 1.21.11** (author: steelaspect) that adds
 [Litematica](https://modrinth.com/mod/litematica). It scans every box of the active Litematica area selection
 and highlights:
 
-- **Unmovable blocks** (red): obsidian, crying obsidian, bedrock, reinforced deepslate, end portal (frame),
+- **Unmovable blocks** (red): obsidian, crying obsidian, reinforced deepslate, end portal (frame),
   end gateway, nether portal, respawn anchor, enchanting table, ender chest, beacon, spawner, trial spawner, vault,
   barrier, light, structure block/void, jigsaw, all command blocks, moving pistons, piston heads and extended
   (sticky) pistons. On top of that list, anything a piston can't push by vanilla's own rules is included:
   indestructible blocks (hardness -1) and push reaction `BLOCK`. Optional (on by default): **all block entities**
   (chests, furnaces, hoppers, signs, ...), detected with `BlockState.hasBlockEntity()`.
+  **Bedrock is never in this group**, so world floors and Nether ceilings don't swamp the results; add
+  `minecraft:bedrock` to the custom list if you do want it.
 - **Liquids** (blue): water and lava, sources and/or flowing, plus waterlogged blocks (checked through the
   block's `FluidState`).
 - **Custom blocks**: any block you add by registry ID, each with its own colour and on/off toggle.
