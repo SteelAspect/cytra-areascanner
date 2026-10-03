@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "id": "cytra-areascanner",
+  "version": "${version}",
+  "name": "Cytra Area Scanner",
+  "description": "Scans the active Litematica area selection for unmovable blocks, liquids and custom blocks, and highlights them live.",
+  "authors": ["steelaspect"],
+  "contact": {
+    "sources": "https://github.com/SteelAspect/cytra-areascanner",
+    "issues": "https://github.com/SteelAspect/cytra-areascanner/issues"
+  },
+  "license": "All-Rights-Reserved",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["dev.steelaspect.areascanner.AreaScannerClient"]
+  },
+  "mixins": [
+    "cytra-areascanner.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "minecraft": "${minecraft_version}",
+    "java": ">=21",
+    "fabric-api": "*",
+    "litematica": ">=${litematica_version}",
+    "malilib": ">=${malilib_version}"
+  }
+}

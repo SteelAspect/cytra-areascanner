@@ -1,0 +1,78 @@
+plugins {
+    id 'fabric-loom' version "${loom_version}"
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+    archivesName = project.archives_base_name
+}
+
+repositories {
+    // Litematica and MaLiLib are only published to Modrinth for 1.21.11.
+    exclusiveContent {
+        forRepository {
+            maven { name = 'Modrinth'; url = 'https://api.modrinth.com/maven' }
+        }
+        filter { includeGroup 'maven.modrinth' }
+    }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+    modImplementation "maven.modrinth:litematica:${project.litematica_modrinth_id}"
+    modImplementation "maven.modrinth:malilib:${project.malilib_modrinth_id}"
+}
+
+// MaLiLib ships conditional-mixin as a jar-in-jar. Loom doesn't unpack nested jars of Maven mods for
+// dev runs, so MaLiLib's own copy is put on the local runtime classpath (runClient only, never in our jar).
+configurations {
+    malilibArtifact { transitive = false }
+}
+dependencies {
+    malilibArtifact "maven.modrinth:malilib:${project.malilib_modrinth_id}"
+}
+def malilibNestedJar = layout.buildDirectory.file('malilib-nested/conditional-mixin-fabric.jar').get().asFile
+if (!malilibNestedJar.exists()) {
+    new java.util.zip.ZipFile(configurations.malilibArtifact.singleFile).withCloseable { zip ->
+        def entry = zip.entries().find { it.name.startsWith('META-INF/jars/conditional-mixin') }
+        if (entry != null) {
+            malilibNestedJar.parentFile.mkdirs()
+            malilibNestedJar.bytes = zip.getInputStream(entry).bytes
+        }
+    }
+}
+dependencies {
+    if (malilibNestedJar.exists()) {
+        modLocalRuntime files(malilibNestedJar)
+    }
+}
+
+processResources {
+    def props = [
+            version           : project.version,
+            minecraft_version : project.minecraft_version,
+            loader_version    : project.loader_version,
+            litematica_version: project.litematica_version,
+            malilib_version   : project.malilib_version
+    ]
+    inputs.properties props
+    filesMatching('fabric.mod.json') {
+        expand props
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.encoding = 'UTF-8'
+    it.options.release = 21
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}
