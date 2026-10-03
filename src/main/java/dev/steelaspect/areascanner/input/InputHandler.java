@@ -69,6 +69,18 @@ public final class InputHandler implements IKeybindProvider, IHotkeyCallback {
             ScanManager.start();
             return true;
         }
+        if (key == Configs.NEXT_MATCH.getKeybind()) {
+            ScanActions.nextMatch();
+            return true;
+        }
+        if (key == Configs.EXPORT_CHAT.getKeybind()) {
+            ScanActions.exportChat();
+            return true;
+        }
+        if (key == Configs.EXPORT_CLIPBOARD.getKeybind()) {
+            ScanActions.exportClipboard();
+            return true;
+        }
         if (key == Configs.ADD_LOOKED_AT.getKeybind()) {
             ScanActions.addLookedAtBlock();
             return true;

@@ -3,6 +3,7 @@ package dev.steelaspect.areascanner.gui;
 import dev.steelaspect.areascanner.Reference;
 import dev.steelaspect.areascanner.config.Configs;
 import dev.steelaspect.areascanner.scan.Category;
+import dev.steelaspect.areascanner.scan.ScanActions;
 import dev.steelaspect.areascanner.scan.ScanManager;
 import fi.dy.masa.malilib.render.GuiContext;
 import fi.dy.masa.malilib.config.IConfigBase;
@@ -22,7 +23,7 @@ public class GuiScanner extends GuiConfigsBase {
     private static Tab tab = Tab.GROUPS;
 
     public GuiScanner(@Nullable Screen parent) {
-        super(10, 72, Reference.MOD_ID, parent, Reference.MOD_ID + ".gui.title.scanner");
+        super(10, 84, Reference.MOD_ID, parent, Reference.MOD_ID + ".gui.title.scanner");
     }
 
     public GuiScanner() {
@@ -72,12 +73,20 @@ public class GuiScanner extends GuiConfigsBase {
             this.initGui();
         });
         x += stop.getWidth() + 2;
-        this.statusX = this.createExportButtons(x, y) + 6;
+        this.createExportButtons(x, y);
     }
 
     /** Adds the export buttons; returns the x after the last one. */
     protected int createExportButtons(int x, int y) {
-        return x;
+        boolean has = ScanManager.isActive() && ScanManager.totalMatches() > 0;
+        ButtonGeneric chat = new ButtonGeneric(x, y, -1, 20, StringUtils.translate(Reference.MOD_ID + ".gui.button.export_chat"));
+        chat.setEnabled(has);
+        this.addButton(chat, (b, m) -> ScanActions.exportChat());
+        x += chat.getWidth() + 2;
+        ButtonGeneric clip = new ButtonGeneric(x, y, -1, 20, StringUtils.translate(Reference.MOD_ID + ".gui.button.export_clipboard"));
+        clip.setEnabled(has);
+        this.addButton(clip, (b, m) -> ScanActions.exportClipboard());
+        return x + clip.getWidth();
     }
 
     @Override
@@ -98,10 +107,8 @@ public class GuiScanner extends GuiConfigsBase {
         if (ScanManager.isActive() && ScanManager.pendingChunks() > 0) {
             status += StringUtils.translate(Reference.MOD_ID + ".gui.label.status.pending", ScanManager.pendingChunks());
         }
-        ctx.drawString(this.font, status, this.statusX, 54, 0xFFE0E0E0);
+        ctx.drawString(this.font, status, 12, 72, 0xFFE0E0E0);
     }
-
-    private int statusX = 10;
 
     @Override
     protected int getConfigWidth() {

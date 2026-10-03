@@ -3,6 +3,7 @@ package dev.steelaspect.areascanner;
 import dev.steelaspect.areascanner.config.Configs;
 import dev.steelaspect.areascanner.gui.GuiScanner;
 import dev.steelaspect.areascanner.input.InputHandler;
+import dev.steelaspect.areascanner.render.HudRenderer;
 import dev.steelaspect.areascanner.render.ScanRenderer;
 import dev.steelaspect.areascanner.scan.ScanManager;
 import fi.dy.masa.malilib.config.ConfigManager;
@@ -25,6 +26,7 @@ public class AreaScannerClient implements ClientModInitializer {
             Registry.CONFIG_SCREEN.registerConfigScreenFactory(new ModInfo(Reference.MOD_ID, Reference.MOD_NAME, GuiScanner::new));
             InputEventHandler.getKeybindManager().registerKeybindProvider(InputHandler.getInstance());
             RenderEventHandler.getInstance().registerWorldLastRenderer(ScanRenderer.INSTANCE);
+            RenderEventHandler.getInstance().registerGameOverlayRenderer(HudRenderer.INSTANCE);
             Configs.ChangeListener.set(ScanManager::onSettingsChanged);
         });
 

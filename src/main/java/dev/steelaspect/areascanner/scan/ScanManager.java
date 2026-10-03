@@ -44,6 +44,7 @@ public final class ScanManager {
     private static final LongOpenHashSet DIRTY = new LongOpenHashSet();
 
     private static boolean active;
+    /** True until the user-started scan finishes, so "Scan done" is announced once. */
     private static boolean initialScan;
     private static List<BoundingBox> boxes = List.of();
     @Nullable
@@ -157,6 +158,7 @@ public final class ScanManager {
         totalBlocks = 0;
         doneBlocks = 0;
         version++;
+        ScanActions.resetCycle();
     }
 
     /** Settings changed: rescan the same boxes if the match rules changed, otherwise only colours changed. */
@@ -171,7 +173,6 @@ public final class ScanManager {
             PENDING_CHUNKS.clear();
             totalBlocks = 0;
             doneBlocks = 0;
-            initialScan = true;
             enqueueAll();
         }
         version++;

@@ -53,6 +53,18 @@ dependencies {
     }
 }
 
+// In-game client tests (src/gametest), run with ./gradlew runClientGameTest. Not part of the mod jar.
+fabricApi {
+    configureTests {
+        createSourceSet = true
+        modId = 'cytra-areascanner-test'
+        enableGameTests = false
+        enableClientGameTests = true
+        eula = true
+        clearRunDirectory = true
+    }
+}
+
 processResources {
     def props = [
             version           : project.version,

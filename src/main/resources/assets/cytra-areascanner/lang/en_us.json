@@ -118,7 +118,7 @@
   "cytra-areascanner.gui.label.empty_custom": "The custom list is empty. Type a block ID above or use the Add looked-at block hotkey.",
   "cytra-areascanner.gui.label.empty_presets": "No presets saved yet.",
   "cytra-areascanner.gui.label.unknown_block": "(unknown block)",
-  "cytra-areascanner.gui.label.preset_info": "%s unmovable, %s liquids, %s custom",
+  "cytra-areascanner.gui.label.preset_info": "Unmovable %s, liquids %s, custom %s",
   "cytra-areascanner.gui.label.status.idle": "Not scanning. Selection: %s",
   "cytra-areascanner.gui.label.status.no_selection": "none",
   "cytra-areascanner.gui.label.status.scanning": "Scanning... %s%% (%s matches)",
