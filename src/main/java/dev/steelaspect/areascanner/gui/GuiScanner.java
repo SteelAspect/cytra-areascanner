@@ -49,6 +49,11 @@ public class GuiScanner extends GuiConfigsBase {
 
     /** Buttons that open the custom list and preset screens. */
     protected void createListButtons(int x, int y) {
+        ButtonGeneric custom = new ButtonGeneric(x, y, -1, 20, StringUtils.translate(Reference.MOD_ID + ".gui.button.custom_list"));
+        this.addButton(custom, (b, m) -> GuiBase.openGui(new GuiCustomList(this)));
+        x += custom.getWidth() + 2;
+        ButtonGeneric presets = new ButtonGeneric(x, y, -1, 20, StringUtils.translate(Reference.MOD_ID + ".gui.button.presets"));
+        this.addButton(presets, (b, m) -> GuiBase.openGui(new GuiPresets(this)));
     }
 
     /** Row of scan action buttons above the option list. */

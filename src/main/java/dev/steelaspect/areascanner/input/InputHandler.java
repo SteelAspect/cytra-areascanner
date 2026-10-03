@@ -3,6 +3,7 @@ package dev.steelaspect.areascanner.input;
 import dev.steelaspect.areascanner.Reference;
 import dev.steelaspect.areascanner.config.Configs;
 import dev.steelaspect.areascanner.gui.GuiScanner;
+import dev.steelaspect.areascanner.scan.ScanActions;
 import dev.steelaspect.areascanner.scan.ScanManager;
 import fi.dy.masa.malilib.config.options.ConfigBooleanHotkeyed;
 import fi.dy.masa.malilib.config.options.ConfigHotkey;
@@ -66,6 +67,10 @@ public final class InputHandler implements IKeybindProvider, IHotkeyCallback {
         if (mc.player == null) return false;
         if (key == Configs.SCAN.getKeybind()) {
             ScanManager.start();
+            return true;
+        }
+        if (key == Configs.ADD_LOOKED_AT.getKeybind()) {
+            ScanActions.addLookedAtBlock();
             return true;
         }
         if (key == Configs.STOP.getKeybind()) {
