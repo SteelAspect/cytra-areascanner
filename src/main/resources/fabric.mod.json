@@ -18,7 +18,7 @@
     "cytra-areascanner.mixins.json"
   ],
   "depends": {
-    "fabricloader": ">=${loader_version}",
+    "fabricloader": ">=0.17.0",
     "minecraft": "${minecraft_version}",
     "java": ">=21",
     "fabric-api": "*",
