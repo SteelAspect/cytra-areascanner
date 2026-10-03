@@ -2,6 +2,9 @@ package dev.steelaspect.areascanner.gui;
 
 import dev.steelaspect.areascanner.Reference;
 import dev.steelaspect.areascanner.config.Configs;
+import dev.steelaspect.areascanner.scan.Category;
+import dev.steelaspect.areascanner.scan.ScanManager;
+import fi.dy.masa.malilib.render.GuiContext;
 import fi.dy.masa.malilib.config.IConfigBase;
 import fi.dy.masa.malilib.gui.GuiBase;
 import fi.dy.masa.malilib.gui.GuiConfigsBase;
@@ -50,7 +53,50 @@ public class GuiScanner extends GuiConfigsBase {
 
     /** Row of scan action buttons above the option list. */
     protected void createActionButtons(int x, int y) {
+        String scanKey = ScanManager.isActive() ? "rescan" : "scan";
+        ButtonGeneric scan = new ButtonGeneric(x, y, -1, 20, StringUtils.translate(Reference.MOD_ID + ".gui.button." + scanKey));
+        this.addButton(scan, (b, m) -> {
+            ScanManager.start();
+            this.initGui();
+        });
+        x += scan.getWidth() + 2;
+        ButtonGeneric stop = new ButtonGeneric(x, y, -1, 20, StringUtils.translate(Reference.MOD_ID + ".gui.button.stop"));
+        stop.setEnabled(ScanManager.isActive());
+        this.addButton(stop, (b, m) -> {
+            ScanManager.stop(true);
+            this.initGui();
+        });
+        x += stop.getWidth() + 2;
+        this.statusX = this.createExportButtons(x, y) + 6;
     }
+
+    /** Adds the export buttons; returns the x after the last one. */
+    protected int createExportButtons(int x, int y) {
+        return x;
+    }
+
+    @Override
+    public void drawContents(GuiContext ctx, int mouseX, int mouseY, float partialTicks) {
+        super.drawContents(ctx, mouseX, mouseY, partialTicks);
+        String status;
+        if (!ScanManager.isActive()) {
+            int boxes = ScanManager.selectionBoxCount();
+            String sel = boxes > 0 ? boxes + " box(es)" : StringUtils.translate(Reference.MOD_ID + ".gui.label.status.no_selection");
+            status = StringUtils.translate(Reference.MOD_ID + ".gui.label.status.idle", sel);
+        } else if (ScanManager.isScanning()) {
+            status = StringUtils.translate(Reference.MOD_ID + ".gui.label.status.scanning",
+                    (int) (ScanManager.progress() * 100), ScanManager.totalMatches());
+        } else {
+            status = StringUtils.translate(Reference.MOD_ID + ".gui.label.status.live",
+                    ScanManager.count(Category.UNMOVABLE), ScanManager.count(Category.LIQUID), ScanManager.count(Category.CUSTOM));
+        }
+        if (ScanManager.isActive() && ScanManager.pendingChunks() > 0) {
+            status += StringUtils.translate(Reference.MOD_ID + ".gui.label.status.pending", ScanManager.pendingChunks());
+        }
+        ctx.drawString(this.font, status, this.statusX, 54, 0xFFE0E0E0);
+    }
+
+    private int statusX = 10;
 
     @Override
     protected int getConfigWidth() {
