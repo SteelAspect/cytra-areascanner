@@ -4,7 +4,8 @@
   "package": "dev.steelaspect.areascanner.mixin",
   "compatibilityLevel": "JAVA_21",
   "client": [
-    "GuiMainMenuMixin"
+    "GuiMainMenuMixin",
+    "LevelMixin"
   ],
   "injectors": {
     "defaultRequire": 1
