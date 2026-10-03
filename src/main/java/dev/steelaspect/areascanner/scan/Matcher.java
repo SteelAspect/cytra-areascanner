@@ -7,6 +7,7 @@ import it.unimi.dsi.fastutil.objects.Reference2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.objects.ReferenceOpenHashSet;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.BlockGetter;
+import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.LiquidBlock;
@@ -37,26 +38,26 @@ public final class Matcher {
 
     private static final Map<Block, Match> CUSTOM_MATCHES = new Reference2ObjectOpenHashMap<>();
 
-    private static boolean unmovable;
-    private static boolean blockEntities;
-    private static boolean liquids;
-    private static boolean sourcesOnly;
-    private static boolean waterlogged;
-    private static boolean custom;
-    private static Map<Block, Match> enabledCustom = Map.of();
+
+    /** The match rules, swapped as one immutable object so worker threads always see a consistent set. */
+    private record Rules(boolean unmovable, boolean blockEntities, boolean liquids, boolean sourcesOnly,
+                         boolean waterlogged, boolean custom, Map<Block, Match> enabledCustom) {
+    }
+
+    private static volatile Rules rules = new Rules(true, true, true, false, true, true, Map.of());
     private static String signature = "";
 
     private Matcher() {
     }
 
-    /** Re-reads the settings. Returns true if what matches changed (colours don't count). */
+    /** Re-reads the settings (main thread). Returns true if what matches changed (colours don't count). */
     public static boolean refresh() {
-        unmovable = Configs.UNMOVABLE_ENABLED.getBooleanValue();
-        blockEntities = Configs.UNMOVABLE_BLOCK_ENTITIES.getBooleanValue();
-        liquids = Configs.LIQUIDS_ENABLED.getBooleanValue();
-        sourcesOnly = Configs.LIQUIDS_SOURCES_ONLY.getBooleanValue();
-        waterlogged = Configs.LIQUIDS_WATERLOGGED.getBooleanValue();
-        custom = Configs.CUSTOM_ENABLED.getBooleanValue();
+        boolean unmovable = Configs.UNMOVABLE_ENABLED.getBooleanValue();
+        boolean blockEntities = Configs.UNMOVABLE_BLOCK_ENTITIES.getBooleanValue();
+        boolean liquids = Configs.LIQUIDS_ENABLED.getBooleanValue();
+        boolean sourcesOnly = Configs.LIQUIDS_SOURCES_ONLY.getBooleanValue();
+        boolean waterlogged = Configs.LIQUIDS_WATERLOGGED.getBooleanValue();
+        boolean custom = Configs.CUSTOM_ENABLED.getBooleanValue();
 
         Map<Block, Match> map = new Reference2ObjectOpenHashMap<>();
         StringBuilder sig = new StringBuilder();
@@ -70,7 +71,7 @@ public final class Matcher {
                 sig.append('|').append(entry.blockId);
             }
         }
-        enabledCustom = map;
+        rules = new Rules(unmovable, blockEntities, liquids, sourcesOnly, waterlogged, custom, map);
         String newSignature = sig.toString();
         boolean changed = !newSignature.equals(signature);
         signature = newSignature;
@@ -78,24 +79,30 @@ public final class Matcher {
     }
 
     /** The shared match instance for a custom block. */
-    public static Match customMatch(Block block) {
+    public static synchronized Match customMatch(Block block) {
         return CUSTOM_MATCHES.computeIfAbsent(block, b -> new Match(Category.CUSTOM, b));
     }
 
     @Nullable
     public static Match match(BlockState state, BlockGetter level, BlockPos pos) {
         if (state.isAir()) return null;
-        if (custom) {
-            Match m = enabledCustom.get(state.getBlock());
+        Rules r = rules;
+        if (r.custom) {
+            Match m = r.enabledCustom.get(state.getBlock());
             if (m != null) return m;
         }
-        if (unmovable && isUnmovable(state, level, pos)) return UNMOVABLE;
-        if (liquids && isLiquid(state)) return LIQUID;
+        if (r.unmovable && isUnmovable(state, level, pos, r.blockEntities)) return UNMOVABLE;
+        if (r.liquids && isLiquid(state, r.waterlogged, r.sourcesOnly)) return LIQUID;
         return null;
     }
 
+    /** Position-independent check, used to skip chunk sections whose palette can't contain a match. */
+    public static boolean couldMatch(BlockState state) {
+        return match(state, EmptyBlockGetter.INSTANCE, BlockPos.ZERO) != null;
+    }
+
     /** Mirrors the checks in PistonBaseBlock.isPushable, plus the explicit list. */
-    public static boolean isUnmovable(BlockState state, BlockGetter level, BlockPos pos) {
+    private static boolean isUnmovable(BlockState state, BlockGetter level, BlockPos pos, boolean blockEntities) {
         Block block = state.getBlock();
         if (UNMOVABLE_BLOCKS.contains(block)) return true;
         if (block instanceof PistonBaseBlock) {
@@ -106,7 +113,7 @@ public final class Matcher {
         return blockEntities && state.hasBlockEntity();
     }
 
-    public static boolean isLiquid(BlockState state) {
+    private static boolean isLiquid(BlockState state, boolean waterlogged, boolean sourcesOnly) {
         FluidState fluid = state.getFluidState();
         if (fluid.isEmpty()) return false;
         if (!(state.getBlock() instanceof LiquidBlock) && !waterlogged) return false;

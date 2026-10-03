@@ -8,21 +8,26 @@ import dev.steelaspect.areascanner.config.CustomEntry;
 import dev.steelaspect.areascanner.config.ScanLists;
 import dev.steelaspect.areascanner.scan.Category;
 import dev.steelaspect.areascanner.scan.Match;
+import dev.steelaspect.areascanner.scan.MatchListener;
 import dev.steelaspect.areascanner.scan.ScanManager;
 import fi.dy.masa.malilib.interfaces.IRenderer;
 import fi.dy.masa.malilib.render.MaLiLibPipelines;
 import fi.dy.masa.malilib.render.RenderContext;
 import fi.dy.masa.malilib.render.RenderUtils;
 import fi.dy.masa.malilib.util.data.Color4f;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
-import it.unimi.dsi.fastutil.objects.ObjectIterator;
+import it.unimi.dsi.fastutil.longs.LongIterator;
+import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+import it.unimi.dsi.fastutil.longs.LongSet;
+import net.minecraft.core.SectionPos;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.phys.Vec3;
 import org.joml.Matrix4f;
 
+import java.util.ArrayList;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -30,7 +35,7 @@ import java.util.Map;
  * plus outlines, optionally through walls. Neighbouring matches of the same colour are merged into one
  * shape, so large areas stay cheap to draw.
  */
-public final class ScanRenderer implements IRenderer {
+public final class ScanRenderer implements IRenderer, MatchListener {
     public static final ScanRenderer INSTANCE = new ScanRenderer();
 
     // Directions: 0 down, 1 up, 2 north (-z), 3 south (+z), 4 west (-x), 5 east (+x)
@@ -66,18 +71,14 @@ public final class ScanRenderer implements IRenderer {
             EDGE_TO[e] = p1;
         }
     }
-    private static final long REBUILD_INTERVAL_MS = 100;
-    private static final long REBUILD_INTERVAL_SCANNING_MS = 500;
+    /** Time per frame spent rebuilding changed sections; the rest waits for the next frame. */
+    private static final long REBUILD_BUDGET_NANOS = 3_000_000L;
 
-    // Render cache, rebuilt when the matches change.
-    private long[] positions = new long[0];
-    private Match[] cachedMatches = new Match[0];
-    private byte[] faceMasks = new byte[0];
-    private short[] edgeMasks = new short[0];
-    private int size;
-    private int cachedVersion = -1;
-    private boolean cachedMerge;
-    private long lastRebuild;
+    // Render cache: per 16x16x16 section, only the matches with a visible face. Rebuilt per section when a match
+    // in it (or touching it) changes, so live updates and big scans never rebuild everything at once.
+    private final Long2ObjectOpenHashMap<SectionGeometry> sections = new Long2ObjectOpenHashMap<>();
+    private final LongOpenHashSet dirtySections = new LongOpenHashSet();
+    private boolean cachedMerge = true;
     private boolean loggedError;
 
     private ScanRenderer() {
@@ -113,44 +114,94 @@ public final class ScanRenderer implements IRenderer {
 
     // ---------------------------------------------------------------- cache
 
+    @Override
+    public void onMatchChanged(long pos) {
+        int x = BlockPos.getX(pos), y = BlockPos.getY(pos), z = BlockPos.getZ(pos);
+        int sx = x >> 4, sy = y >> 4, sz = z >> 4;
+        // A change affects the faces/edges of neighbours, which may sit in the next section over.
+        int x0 = (x & 15) == 0 ? -1 : 0, x1 = (x & 15) == 15 ? 1 : 0;
+        int y0 = (y & 15) == 0 ? -1 : 0, y1 = (y & 15) == 15 ? 1 : 0;
+        int z0 = (z & 15) == 0 ? -1 : 0, z1 = (z & 15) == 15 ? 1 : 0;
+        for (int dx = x0; dx <= x1; dx++) {
+            for (int dy = y0; dy <= y1; dy++) {
+                for (int dz = z0; dz <= z1; dz++) {
+                    this.dirtySections.add(SectionPos.asLong(sx + dx, sy + dy, sz + dz));
+                }
+            }
+        }
+    }
+
+    @Override
+    public void onMatchesCleared() {
+        this.sections.clear();
+        this.dirtySections.clear();
+    }
+
     private void updateCache() {
         boolean merge = Configs.MERGE_FACES.getBooleanValue();
-        int version = ScanManager.version();
-        if (version == this.cachedVersion && merge == this.cachedMerge) return;
-        long now = System.currentTimeMillis();
-        // Rebuilding is O(matches); with very large match sets rebuild less often.
-        long interval = (ScanManager.isScanning() ? REBUILD_INTERVAL_SCANNING_MS : REBUILD_INTERVAL_MS) + ScanManager.totalMatches() / 2000;
-        if (merge == this.cachedMerge && this.cachedVersion != -1 && now - this.lastRebuild < interval) return;
-        this.lastRebuild = now;
-        this.cachedVersion = version;
-        this.cachedMerge = merge;
-
-        Long2ObjectOpenHashMap<Match> matches = ScanManager.matches();
-        int n = matches.size();
-        if (this.positions.length < n) {
-            int cap = Math.max(n, this.positions.length * 3 / 2);
-            this.positions = new long[cap];
-            this.cachedMatches = new Match[cap];
-            this.faceMasks = new byte[cap];
-            this.edgeMasks = new short[cap];
+        if (merge != this.cachedMerge) {
+            this.cachedMerge = merge;
+            this.dirtySections.addAll(ScanManager.sectionKeys());
         }
-        int i = 0;
-        boolean[] same = new boolean[6];
-        for (ObjectIterator<Long2ObjectMap.Entry<Match>> it = matches.long2ObjectEntrySet().fastIterator(); it.hasNext(); ) {
-            Long2ObjectMap.Entry<Match> entry = it.next();
-            long pos = entry.getLongKey();
-            Match match = entry.getValue();
-            int faces = 0x3F;
-            int edges = 0xFFF;
-            if (merge) {
-                int x = BlockPos.getX(pos), y = BlockPos.getY(pos), z = BlockPos.getZ(pos);
-                faces = 0;
-                for (int d = 0; d < 6; d++) {
-                    same[d] = matches.get(BlockPos.asLong(x + DX[d], y + DY[d], z + DZ[d])) == match;
-                    if (!same[d]) faces |= 1 << d;
-                }
-                edges = 0;
-                if (faces != 0) {
+        if (this.dirtySections.isEmpty()) return;
+        long deadline = System.nanoTime() + REBUILD_BUDGET_NANOS;
+        Long2ObjectOpenHashMap<Match> matches = ScanManager.matches();
+        int n = 0;
+        for (LongIterator it = this.dirtySections.iterator(); it.hasNext(); ) {
+            long key = it.nextLong();
+            it.remove();
+            LongSet positions = ScanManager.sectionMatches(key);
+            if (positions == null || positions.isEmpty()) {
+                this.sections.remove(key);
+            } else {
+                SectionGeometry geometry = this.sections.computeIfAbsent(key, k -> new SectionGeometry(k));
+                geometry.rebuild(positions, matches, merge);
+                if (geometry.size == 0) this.sections.remove(key);
+            }
+            if ((++n & 7) == 0 && System.nanoTime() > deadline) break;
+        }
+    }
+
+    /** Cached render data of one section: matches that have at least one visible face. */
+    private static final class SectionGeometry {
+        final double centerX, centerY, centerZ;
+        long[] positions = new long[16];
+        Match[] matches = new Match[16];
+        byte[] faceMasks = new byte[16];
+        short[] edgeMasks = new short[16];
+        int size;
+
+        SectionGeometry(long key) {
+            this.centerX = (SectionPos.x(key) << 4) + 8;
+            this.centerY = (SectionPos.y(key) << 4) + 8;
+            this.centerZ = (SectionPos.z(key) << 4) + 8;
+        }
+
+        void rebuild(LongSet sectionPositions, Long2ObjectOpenHashMap<Match> all, boolean merge) {
+            int cap = sectionPositions.size();
+            if (this.positions.length < cap) {
+                this.positions = new long[cap];
+                this.matches = new Match[cap];
+                this.faceMasks = new byte[cap];
+                this.edgeMasks = new short[cap];
+            }
+            this.size = 0;
+            boolean[] same = new boolean[6];
+            for (LongIterator it = sectionPositions.iterator(); it.hasNext(); ) {
+                long pos = it.nextLong();
+                Match match = all.get(pos);
+                if (match == null) continue;
+                int faces = 0x3F;
+                int edges = 0xFFF;
+                if (merge) {
+                    int x = BlockPos.getX(pos), y = BlockPos.getY(pos), z = BlockPos.getZ(pos);
+                    faces = 0;
+                    for (int d = 0; d < 6; d++) {
+                        same[d] = all.get(BlockPos.asLong(x + DX[d], y + DY[d], z + DZ[d])) == match;
+                        if (!same[d]) faces |= 1 << d;
+                    }
+                    if (faces == 0) continue; // fully enclosed by the same colour: nothing to draw
+                    edges = 0;
                     for (int e = 0; e < 12; e++) {
                         int a = EDGES[e][0], b = EDGES[e][1];
                         boolean draw;
@@ -158,21 +209,20 @@ public final class ScanRenderer implements IRenderer {
                             draw = true; // convex edge
                         } else if (same[a] != same[b]) {
                             // One side continues: it's an edge only if the shape turns inward there (concave).
-                            draw = matches.get(BlockPos.asLong(x + DX[a] + DX[b], y + DY[a] + DY[b], z + DZ[a] + DZ[b])) == match;
+                            draw = all.get(BlockPos.asLong(x + DX[a] + DX[b], y + DY[a] + DY[b], z + DZ[a] + DZ[b])) == match;
                         } else {
                             draw = false;
                         }
                         if (draw) edges |= 1 << e;
                     }
                 }
+                int i = this.size++;
+                this.positions[i] = pos;
+                this.matches[i] = match;
+                this.faceMasks[i] = (byte) faces;
+                this.edgeMasks[i] = (short) edges;
             }
-            this.positions[i] = pos;
-            this.cachedMatches[i] = match;
-            this.faceMasks[i] = (byte) faces;
-            this.edgeMasks[i] = (short) edges;
-            i++;
         }
-        this.size = i;
     }
 
     // ---------------------------------------------------------------- drawing
@@ -188,16 +238,27 @@ public final class ScanRenderer implements IRenderer {
         float lineWidth = (float) Configs.LINE_WIDTH.getDoubleValue();
         Map<Match, Integer> colors = colorTable();
 
-        // Pick what is in range once, shared by both passes.
-        int[] visible = new int[Math.min(this.size, maxRendered)];
+        // Pick what is in range once (whole sections first), shared by both passes.
+        double sectionRange = range + 14.0;
+        double sectionRangeSq = sectionRange * sectionRange;
+        List<SectionGeometry> visibleSections = new ArrayList<>();
+        int[] visibleIndex = new int[Math.min(maxRendered, 1 << 16)];
         int count = 0;
-        for (int i = 0; i < this.size && count < visible.length; i++) {
-            if (this.faceMasks[i] == 0) continue;
-            long pos = this.positions[i];
-            double dx = BlockPos.getX(pos) + 0.5 - cam.x;
-            double dy = BlockPos.getY(pos) + 0.5 - cam.y;
-            double dz = BlockPos.getZ(pos) + 0.5 - cam.z;
-            if (dx * dx + dy * dy + dz * dz <= rangeSq) visible[count++] = i;
+        outer:
+        for (SectionGeometry g : this.sections.values()) {
+            double sx = g.centerX - cam.x, sy = g.centerY - cam.y, sz = g.centerZ - cam.z;
+            if (sx * sx + sy * sy + sz * sz > sectionRangeSq) continue;
+            for (int i = 0; i < g.size; i++) {
+                long pos = g.positions[i];
+                double dx = BlockPos.getX(pos) + 0.5 - cam.x;
+                double dy = BlockPos.getY(pos) + 0.5 - cam.y;
+                double dz = BlockPos.getZ(pos) + 0.5 - cam.z;
+                if (dx * dx + dy * dy + dz * dz > rangeSq) continue;
+                if (count == maxRendered) break outer;
+                if (count == visibleIndex.length) visibleIndex = java.util.Arrays.copyOf(visibleIndex, Math.min(maxRendered, count * 2));
+                visibleSections.add(g);
+                visibleIndex[count++] = i;
+            }
         }
         if (count == 0) return;
 
@@ -207,9 +268,10 @@ public final class ScanRenderer implements IRenderer {
                     : MaLiLibPipelines.POSITION_COLOR_TRANSLUCENT_LEQUAL_DEPTH_OFFSET_2)) {
                 BufferBuilder buffer = ctx.getBuilder();
                 for (int k = 0; k < count; k++) {
-                    int i = visible[k];
-                    int rgb = colors.getOrDefault(this.cachedMatches[i], 0xFFFFFF);
-                    drawFaces(this.positions[i], this.faceMasks[i], cam, rgb, fillAlpha, buffer);
+                    SectionGeometry g = visibleSections.get(k);
+                    int i = visibleIndex[k];
+                    int rgb = colors.getOrDefault(g.matches[i], 0xFFFFFF);
+                    drawFaces(g.positions[i], g.faceMasks[i], cam, rgb, fillAlpha, buffer);
                 }
                 draw(ctx, buffer);
             }
@@ -220,9 +282,10 @@ public final class ScanRenderer implements IRenderer {
                     : MaLiLibPipelines.DEBUG_LINES_MASA_SIMPLE_LEQUAL_DEPTH)) {
                 BufferBuilder buffer = ctx.getBuilder();
                 for (int k = 0; k < count; k++) {
-                    int i = visible[k];
-                    int rgb = colors.getOrDefault(this.cachedMatches[i], 0xFFFFFF);
-                    drawEdges(this.positions[i], this.edgeMasks[i], cam, rgb, outlineAlpha, lineWidth, buffer);
+                    SectionGeometry g = visibleSections.get(k);
+                    int i = visibleIndex[k];
+                    int rgb = colors.getOrDefault(g.matches[i], 0xFFFFFF);
+                    drawEdges(g.positions[i], g.edgeMasks[i], cam, rgb, outlineAlpha, lineWidth, buffer);
                 }
                 draw(ctx, buffer);
             }

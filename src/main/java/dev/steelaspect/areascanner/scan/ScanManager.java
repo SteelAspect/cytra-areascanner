@@ -7,7 +7,7 @@ import fi.dy.masa.litematica.selection.AreaSelection;
 import fi.dy.masa.litematica.selection.Box;
 import fi.dy.masa.malilib.gui.Message;
 import fi.dy.masa.malilib.util.InfoUtils;
-import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import it.unimi.dsi.fastutil.longs.LongIterator;
 import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
@@ -15,26 +15,40 @@ import it.unimi.dsi.fastutil.longs.LongSet;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.SectionPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.EmptyBlockGetter;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
+import net.minecraft.world.level.chunk.PalettedContainer;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Scans the boxes of the active Litematica area selection over several ticks, keeps the matches up to
- * date from client block updates, and rescans chunks when they (re)load.
+ * Scans the boxes of the active Litematica area selection, keeps the matches up to date from client block
+ * updates, and rescans chunks when they (re)load.
+ *
+ * <p>Background mode: the main thread copies the block palettes of the chunk sections a job needs (cheap),
+ * worker threads scan the copies, and the results are applied back on the main thread. Positions that change
+ * while a job is in flight are re-checked against the live world when its result is applied, and results from
+ * an outdated scan (settings changed, chunk reloaded, scan stopped) are dropped by generation number.
  */
 public final class ScanManager {
     private static final Long2ObjectOpenHashMap<Match> MATCHES = new Long2ObjectOpenHashMap<>();
-    /** Chunk key -> positions of the matches in that chunk column, for clearing a chunk quickly. */
-    private static final Long2ObjectOpenHashMap<LongSet> MATCHES_BY_CHUNK = new Long2ObjectOpenHashMap<>();
+    /** Section key -> positions of the matches in that 16x16x16 section. */
+    private static final Long2ObjectOpenHashMap<LongSet> MATCHES_BY_SECTION = new Long2ObjectOpenHashMap<>();
     private static final int[] COUNTS = new int[Category.values().length];
 
     private static final ArrayDeque<Job> QUEUE = new ArrayDeque<>();
@@ -42,6 +56,19 @@ public final class ScanManager {
     private static final LongOpenHashSet PENDING_CHUNKS = new LongOpenHashSet();
     /** Positions changed by block updates, re-checked on the next tick. Filled from setBlock. */
     private static final LongOpenHashSet DIRTY = new LongOpenHashSet();
+
+    // Background scanning
+    private static final int MAX_IN_FLIGHT = 64;
+    private static final int MAX_SUBMITS_PER_TICK = 48;
+    private static final int MAX_APPLIED_PER_TICK = 200_000;
+    private static final ConcurrentLinkedQueue<JobResult> RESULTS = new ConcurrentLinkedQueue<>();
+    /** Chunk key -> jobs currently being scanned by a worker. */
+    private static final Long2ObjectOpenHashMap<List<Job>> IN_FLIGHT = new Long2ObjectOpenHashMap<>();
+    private static final Long2IntOpenHashMap CHUNK_GENERATION = new Long2IntOpenHashMap();
+    @Nullable
+    private static ExecutorService executor;
+    private static int inFlightCount;
+    private static int generation;
 
     private static boolean active;
     /** True until the user-started scan finishes, so "Scan done" is announced once. */
@@ -56,8 +83,13 @@ public final class ScanManager {
     private static long totalBlocks;
     private static long doneBlocks;
     private static int version;
+    private static MatchListener listener = MatchListener.NONE;
 
     private ScanManager() {
+    }
+
+    public static void setListener(MatchListener l) {
+        listener = l;
     }
 
     // ---------------------------------------------------------------- state
@@ -67,7 +99,7 @@ public final class ScanManager {
     }
 
     public static boolean isScanning() {
-        return active && !QUEUE.isEmpty();
+        return active && (!QUEUE.isEmpty() || inFlightCount > 0 || !RESULTS.isEmpty());
     }
 
     /** Scan progress 0..1 of the queued work. */
@@ -94,6 +126,16 @@ public final class ScanManager {
 
     public static Long2ObjectOpenHashMap<Match> matches() {
         return MATCHES;
+    }
+
+    /** Positions of the matches in one section, or null. */
+    @Nullable
+    public static LongSet sectionMatches(long sectionKey) {
+        return MATCHES_BY_SECTION.get(sectionKey);
+    }
+
+    public static LongSet sectionKeys() {
+        return MATCHES_BY_SECTION.keySet();
     }
 
     public static List<BoundingBox> boxes() {
@@ -142,11 +184,7 @@ public final class ScanManager {
     private static void clear() {
         active = false;
         initialScan = false;
-        MATCHES.clear();
-        MATCHES_BY_CHUNK.clear();
-        java.util.Arrays.fill(COUNTS, 0);
-        QUEUE.clear();
-        QUEUED_CHUNKS.clear();
+        clearMatchesAndWork();
         PENDING_CHUNKS.clear();
         synchronized (DIRTY) {
             DIRTY.clear();
@@ -155,24 +193,33 @@ public final class ScanManager {
         bounds = null;
         level = null;
         dimension = null;
+        ScanActions.resetCycle();
+    }
+
+    /** Drops all matches and queued/in-flight work (in-flight results are discarded when they arrive). */
+    private static void clearMatchesAndWork() {
+        generation++;
+        MATCHES.clear();
+        MATCHES_BY_SECTION.clear();
+        Arrays.fill(COUNTS, 0);
+        QUEUE.clear();
+        QUEUED_CHUNKS.clear();
+        IN_FLIGHT.clear();
+        CHUNK_GENERATION.clear();
+        RESULTS.clear();
+        inFlightCount = 0;
         totalBlocks = 0;
         doneBlocks = 0;
         version++;
-        ScanActions.resetCycle();
+        listener.onMatchesCleared();
     }
 
     /** Settings changed: rescan the same boxes if the match rules changed, otherwise only colours changed. */
     public static void onSettingsChanged() {
         boolean rulesChanged = Matcher.refresh();
         if (active && rulesChanged) {
-            MATCHES.clear();
-            MATCHES_BY_CHUNK.clear();
-            java.util.Arrays.fill(COUNTS, 0);
-            QUEUE.clear();
-            QUEUED_CHUNKS.clear();
+            clearMatchesAndWork();
             PENDING_CHUNKS.clear();
-            totalBlocks = 0;
-            doneBlocks = 0;
             enqueueAll();
         }
         version++;
@@ -265,45 +312,188 @@ public final class ScanManager {
             level = mc.level;
         }
         processDirty(mc.level);
-        processQueue(mc.level);
+        applyResults(mc.level);
+        if (Configs.BACKGROUND_SCANNING.getBooleanValue()) {
+            submitJobs(mc.level);
+        } else {
+            processQueueInline(mc.level);
+        }
+        if (QUEUE.isEmpty() && inFlightCount == 0 && RESULTS.isEmpty() && totalBlocks > 0) {
+            finishScan();
+        }
     }
 
-    private static void processQueue(ClientLevel lvl) {
-        if (QUEUE.isEmpty()) return;
+    private static void finishScan() {
+        if (initialScan) {
+            initialScan = false;
+            InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, Reference.MOD_ID + ".message.scan_done",
+                    count(Category.UNMOVABLE), count(Category.LIQUID), count(Category.CUSTOM));
+        }
+        totalBlocks = 0;
+        doneBlocks = 0;
+    }
+
+    /** ClientLevel.hasChunk always returns true, so ask the chunk cache directly. */
+    private static boolean isLoaded(ClientLevel lvl, int cx, int cz) {
+        return lvl.getChunkSource().hasChunk(cx, cz);
+    }
+
+    /** Takes the next job off the queue; returns the loaded chunk, or null if it was unloaded (now pending). */
+    @Nullable
+    private static LevelChunk startJob(ClientLevel lvl, Job job) {
+        QUEUED_CHUNKS.remove(job.chunkKey);
+        if (!isLoaded(lvl, job.cx, job.cz)) {
+            PENDING_CHUNKS.add(job.chunkKey);
+            doneBlocks += job.volume();
+            return null;
+        }
+        return lvl.getChunk(job.cx, job.cz);
+    }
+
+    /** The section of a chunk at a block Y, or null if outside the chunk or empty. */
+    @Nullable
+    private static LevelChunkSection section(LevelChunk chunk, int y) {
+        LevelChunkSection[] sections = chunk.getSections();
+        int index = chunk.getSectionIndex(y);
+        return index >= 0 && index < sections.length ? sections[index] : null;
+    }
+
+    /** True if a section can't contain a match: all air, or no palette entry matches. */
+    private static boolean skipSection(@Nullable LevelChunkSection section) {
+        return section == null || section.hasOnlyAir() || !section.maybeHas(Matcher::couldMatch);
+    }
+
+    // ---- background mode
+
+    private static ExecutorService executor() {
+        if (executor == null) {
+            int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+            AtomicInteger n = new AtomicInteger();
+            executor = Executors.newFixedThreadPool(threads, r -> {
+                Thread t = new Thread(r, "AreaScanner-worker-" + n.incrementAndGet());
+                t.setDaemon(true);
+                t.setPriority(Thread.NORM_PRIORITY - 1);
+                return t;
+            });
+        }
+        return executor;
+    }
+
+    /** Copies the needed section palettes on the main thread and hands the jobs to the workers. */
+    private static void submitJobs(ClientLevel lvl) {
+        int submitted = 0;
+        while (!QUEUE.isEmpty() && inFlightCount < MAX_IN_FLIGHT && submitted < MAX_SUBMITS_PER_TICK) {
+            Job job = QUEUE.pollFirst();
+            LevelChunk chunk = startJob(lvl, job);
+            if (chunk == null) continue;
+            int firstSection = job.minY >> 4;
+            int lastSection = job.maxY >> 4;
+            @SuppressWarnings("unchecked")
+            PalettedContainer<BlockState>[] copies = new PalettedContainer[lastSection - firstSection + 1];
+            boolean any = false;
+            for (int s = firstSection; s <= lastSection; s++) {
+                LevelChunkSection section = section(chunk, s << 4);
+                if (!skipSection(section)) {
+                    copies[s - firstSection] = section.getStates().copy();
+                    any = true;
+                }
+            }
+            if (!any) {
+                doneBlocks += job.volume();
+                continue;
+            }
+            job.generation = generation;
+            job.chunkGeneration = CHUNK_GENERATION.get(job.chunkKey);
+            IN_FLIGHT.computeIfAbsent(job.chunkKey, k -> new ArrayList<>()).add(job);
+            inFlightCount++;
+            submitted++;
+            executor().execute(() -> RESULTS.add(scanCopies(job, copies, firstSection)));
+        }
+    }
+
+    /** Worker thread: scans the copied sections. Touches no shared state except the immutable match rules. */
+    private static JobResult scanCopies(Job job, PalettedContainer<BlockState>[] copies, int firstSection) {
+        JobResult result = new JobResult(job);
+        try {
+            BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+            for (int y = job.minY; y <= job.maxY; y++) {
+                PalettedContainer<BlockState> states = copies[(y >> 4) - firstSection];
+                if (states == null) {
+                    y |= 15; // skip the rest of this section
+                    continue;
+                }
+                int ly = y & 15;
+                for (int z = job.minZ; z <= job.maxZ; z++) {
+                    for (int x = job.minX; x <= job.maxX; x++) {
+                        pos.set(x, y, z);
+                        Match match = Matcher.match(states.get(x & 15, ly, z & 15), EmptyBlockGetter.INSTANCE, pos);
+                        if (match != null) result.add(pos.asLong(), match);
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            result.failed = true;
+            Reference.LOGGER.warn("Area scanner worker failed for chunk {} {}", job.cx, job.cz, t);
+        }
+        return result;
+    }
+
+    private static void applyResults(ClientLevel lvl) {
+        int applied = 0;
+        BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
+        JobResult result;
+        while (applied < MAX_APPLIED_PER_TICK && (result = RESULTS.poll()) != null) {
+            Job job = result.job;
+            if (job.generation != generation) continue; // from a scan that was stopped or restarted
+            List<Job> jobs = IN_FLIGHT.get(job.chunkKey);
+            if (jobs != null) {
+                jobs.remove(job);
+                if (jobs.isEmpty()) IN_FLIGHT.remove(job.chunkKey);
+            }
+            inFlightCount--;
+            doneBlocks += job.volume();
+            if (job.chunkGeneration != CHUNK_GENERATION.get(job.chunkKey)) continue; // chunk reloaded meanwhile
+            if (result.failed) continue; // logged by the worker
+
+            for (int i = 0; i < result.size; i++) {
+                if (job.changed != null && job.changed.contains(result.positions[i])) continue;
+                set(result.positions[i], result.matches[i]);
+            }
+            applied += result.size;
+            // Blocks that changed while the copy was being scanned: check them against the live world.
+            if (job.changed != null && isLoaded(lvl, job.cx, job.cz)) {
+                for (LongIterator it = job.changed.iterator(); it.hasNext(); ) {
+                    long packed = it.nextLong();
+                    pos.set(packed);
+                    set(packed, Matcher.match(lvl.getBlockState(pos), lvl, pos));
+                }
+            }
+        }
+    }
+
+    // ---- main-thread mode
+
+    private static void processQueueInline(ClientLevel lvl) {
         int budget = Configs.BLOCKS_PER_TICK.getIntegerValue();
         BlockPos.MutableBlockPos pos = new BlockPos.MutableBlockPos();
         while (budget > 0 && !QUEUE.isEmpty()) {
             Job job = QUEUE.peekFirst();
             if (!job.started) {
                 job.started = true;
-                QUEUED_CHUNKS.remove(job.chunkKey);
-            }
-            if (!isLoaded(lvl, job.cx, job.cz)) {
-                // Not loaded: remember it and scan it when it loads.
+                LevelChunk chunk = startJob(lvl, job);
+                if (chunk == null) {
+                    QUEUE.pollFirst();
+                    continue;
+                }
+            } else if (!isLoaded(lvl, job.cx, job.cz)) {
                 PENDING_CHUNKS.add(job.chunkKey);
                 doneBlocks += job.remaining();
                 QUEUE.pollFirst();
                 continue;
             }
-            LevelChunk chunk = lvl.getChunk(job.cx, job.cz);
-            budget = job.run(lvl, chunk, pos, budget);
+            budget = job.runInline(lvl, lvl.getChunk(job.cx, job.cz), pos, budget);
             if (job.isDone()) QUEUE.pollFirst();
         }
-        if (QUEUE.isEmpty()) {
-            doneBlocks = totalBlocks;
-            if (initialScan) {
-                initialScan = false;
-                InfoUtils.showGuiOrInGameMessage(Message.MessageType.SUCCESS, Reference.MOD_ID + ".message.scan_done",
-                        count(Category.UNMOVABLE), count(Category.LIQUID), count(Category.CUSTOM));
-            }
-            totalBlocks = 0;
-            doneBlocks = 0;
-        }
-    }
-
-    /** ClientLevel.hasChunk always returns true, so ask the chunk cache directly. */
-    private static boolean isLoaded(ClientLevel lvl, int cx, int cz) {
-        return lvl.getChunkSource().hasChunk(cx, cz);
     }
 
     private static void processDirty(ClientLevel lvl) {
@@ -318,6 +508,16 @@ public final class ScanManager {
             pos.set(packed);
             if (!isLoaded(lvl, pos.getX() >> 4, pos.getZ() >> 4)) continue;
             set(packed, Matcher.match(lvl.getBlockState(pos), lvl, pos));
+            // A worker may be scanning an older copy of this block: make it re-check on apply.
+            List<Job> jobs = IN_FLIGHT.get(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
+            if (jobs != null) {
+                for (Job job : jobs) {
+                    if (job.contains(pos.getX(), pos.getY(), pos.getZ())) {
+                        if (job.changed == null) job.changed = new LongOpenHashSet();
+                        job.changed.add(packed);
+                    }
+                }
+            }
         }
     }
 
@@ -341,8 +541,15 @@ public final class ScanManager {
         if (level != loadedLevel) level = loadedLevel;
         long key = ChunkPos.asLong(cx, cz);
         PENDING_CHUNKS.remove(key);
-        if (QUEUED_CHUNKS.contains(key)) return; // already waiting to be scanned, it will read the new data
-        clearChunk(key);
+        if (QUEUED_CHUNKS.remove(key)) {
+            QUEUE.removeIf(job -> {
+                if (job.chunkKey != key) return false;
+                totalBlocks -= job.volume();
+                return true;
+            });
+        }
+        CHUNK_GENERATION.addTo(key, 1); // results of in-flight jobs for the old chunk data are dropped
+        clearChunk(cx, cz);
         enqueueChunk(cx, cz);
     }
 
@@ -376,8 +583,8 @@ public final class ScanManager {
 
     // ---------------------------------------------------------------- match storage
 
-    private static long chunkKeyOf(long packedPos) {
-        return ChunkPos.asLong(BlockPos.getX(packedPos) >> 4, BlockPos.getZ(packedPos) >> 4);
+    public static long sectionKeyOf(long packedPos) {
+        return SectionPos.asLong(BlockPos.getX(packedPos) >> 4, BlockPos.getY(packedPos) >> 4, BlockPos.getZ(packedPos) >> 4);
     }
 
     static void set(long packedPos, @Nullable Match match) {
@@ -385,13 +592,14 @@ public final class ScanManager {
             Match old = MATCHES.remove(packedPos);
             if (old != null) {
                 COUNTS[old.category.ordinal()]--;
-                long key = chunkKeyOf(packedPos);
-                LongSet set = MATCHES_BY_CHUNK.get(key);
+                long key = sectionKeyOf(packedPos);
+                LongSet set = MATCHES_BY_SECTION.get(key);
                 if (set != null) {
                     set.remove(packedPos);
-                    if (set.isEmpty()) MATCHES_BY_CHUNK.remove(key);
+                    if (set.isEmpty()) MATCHES_BY_SECTION.remove(key);
                 }
                 version++;
+                listener.onMatchChanged(packedPos);
             }
             return;
         }
@@ -400,29 +608,28 @@ public final class ScanManager {
         if (old != null) COUNTS[old.category.ordinal()]--;
         COUNTS[match.category.ordinal()]++;
         if (old == null) {
-            MATCHES_BY_CHUNK.computeIfAbsent(chunkKeyOf(packedPos), k -> new LongOpenHashSet()).add(packedPos);
+            MATCHES_BY_SECTION.computeIfAbsent(sectionKeyOf(packedPos), k -> new LongOpenHashSet()).add(packedPos);
         }
         version++;
+        listener.onMatchChanged(packedPos);
     }
 
-    private static void clearChunk(long chunkKey) {
-        LongSet set = MATCHES_BY_CHUNK.remove(chunkKey);
-        if (set == null) return;
-        for (LongIterator it = set.iterator(); it.hasNext(); ) {
-            Match old = MATCHES.remove(it.nextLong());
-            if (old != null) COUNTS[old.category.ordinal()]--;
+    /** Removes all matches in a chunk column. */
+    private static void clearChunk(int cx, int cz) {
+        ClientLevel lvl = level;
+        if (lvl == null) return;
+        for (int sy = lvl.getMinY() >> 4; sy <= lvl.getMaxY() >> 4; sy++) {
+            LongSet set = MATCHES_BY_SECTION.get(SectionPos.asLong(cx, sy, cz));
+            if (set == null) continue;
+            for (long packed : set.toLongArray()) {
+                set(packed, null);
+            }
         }
-        version++;
-    }
-
-    /** Matches grouped for export; custom matches are keyed by their block. */
-    public static List<Long2ObjectMap.Entry<Match>> entries() {
-        return new ArrayList<>(MATCHES.long2ObjectEntrySet());
     }
 
     // ---------------------------------------------------------------- job
 
-    /** The part of one selection box inside one chunk column, scanned one Y layer at a time. */
+    /** The part of one selection box inside one chunk column. */
     private static final class Job {
         final int cx, cz;
         final long chunkKey;
@@ -430,6 +637,11 @@ public final class ScanManager {
         final int layerArea;
         int y;
         boolean started;
+        int generation;
+        int chunkGeneration;
+        /** Positions changed while this job was in flight (main thread only). */
+        @Nullable
+        LongOpenHashSet changed;
 
         Job(int cx, int cz, int minX, int minY, int minZ, int maxX, int maxY, int maxZ) {
             this.cx = cx;
@@ -445,6 +657,10 @@ public final class ScanManager {
             this.y = minY;
         }
 
+        boolean contains(int x, int y, int z) {
+            return x >= this.minX && x <= this.maxX && y >= this.minY && y <= this.maxY && z >= this.minZ && z <= this.maxZ;
+        }
+
         long volume() {
             return (long) this.layerArea * (this.maxY - this.minY + 1);
         }
@@ -457,17 +673,13 @@ public final class ScanManager {
             return this.y > this.maxY;
         }
 
-        /** Scans whole layers until the budget is used up; returns the budget left. */
-        int run(ClientLevel lvl, LevelChunk chunk, BlockPos.MutableBlockPos pos, int budget) {
-            LevelChunkSection[] sections = chunk.getSections();
+        /** Main-thread mode: scans whole layers until the budget is used up; returns the budget left. */
+        int runInline(ClientLevel lvl, LevelChunk chunk, BlockPos.MutableBlockPos pos, int budget) {
             while (this.y <= this.maxY && budget > 0) {
-                int sectionIndex = chunk.getSectionIndex(this.y);
-                LevelChunkSection section = sectionIndex >= 0 && sectionIndex < sections.length ? sections[sectionIndex] : null;
+                LevelChunkSection section = section(chunk, this.y);
                 int sectionTop = Math.min(this.maxY, this.y | 15);
-                if (section == null || section.hasOnlyAir()) {
-                    // Nothing can match in an all-air section.
-                    int layers = sectionTop - this.y + 1;
-                    doneBlocks += (long) layers * this.layerArea;
+                if (skipSection(section)) {
+                    doneBlocks += (long) (sectionTop - this.y + 1) * this.layerArea;
                     this.y = sectionTop + 1;
                     budget -= 16;
                     continue;
@@ -485,6 +697,29 @@ public final class ScanManager {
                 this.y++;
             }
             return budget;
+        }
+    }
+
+    /** Matches a worker found for one job. */
+    private static final class JobResult {
+        final Job job;
+        long[] positions = new long[64];
+        Match[] matches = new Match[64];
+        int size;
+        boolean failed;
+
+        JobResult(Job job) {
+            this.job = job;
+        }
+
+        void add(long pos, Match match) {
+            if (this.size == this.positions.length) {
+                this.positions = Arrays.copyOf(this.positions, this.size * 2);
+                this.matches = Arrays.copyOf(this.matches, this.size * 2);
+            }
+            this.positions[this.size] = pos;
+            this.matches[this.size] = match;
+            this.size++;
         }
     }
 }

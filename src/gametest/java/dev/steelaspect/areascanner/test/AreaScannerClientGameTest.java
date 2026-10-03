@@ -80,6 +80,19 @@ public class AreaScannerClientGameTest implements FabricClientGameTest {
             context.waitTicks(5);
             // Obsidian, chest, extended sticky piston | water, waterlogged stairs, lava
             expect(context, "initial", 3, 3, 0);
+            // Same scan on the main thread (Background Scanning off).
+            context.runOnClient(client -> {
+                Configs.BACKGROUND_SCANNING.setBooleanValue(false);
+                ScanManager.start();
+            });
+            context.waitTicks(5);
+            expect(context, "initial (main thread)", 3, 3, 0);
+            context.runOnClient(client -> {
+                Configs.BACKGROUND_SCANNING.setBooleanValue(true);
+                ScanManager.start();
+            });
+            context.waitTicks(5);
+            expect(context, "initial (background again)", 3, 3, 0);
 
             // Live updates: remove obsidian, add bedrock, drain the water.
             cmd(world, "setblock %s stone", o.offset(1, 0, 1));

@@ -28,6 +28,7 @@ public class AreaScannerClient implements ClientModInitializer {
             RenderEventHandler.getInstance().registerWorldLastRenderer(ScanRenderer.INSTANCE);
             RenderEventHandler.getInstance().registerGameOverlayRenderer(HudRenderer.INSTANCE);
             Configs.ChangeListener.set(ScanManager::onSettingsChanged);
+            ScanManager.setListener(ScanRenderer.INSTANCE);
         });
 
         ClientTickEvents.END_CLIENT_TICK.register(ScanManager::tick);

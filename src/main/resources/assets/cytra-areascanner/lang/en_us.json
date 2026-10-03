@@ -1,7 +1,7 @@
 {
   "cytra-areascanner.config.name.blocksPerTick": "Blocks Per Tick",
   "cytra-areascanner.config.prettyName.blocksPerTick": "Blocks Per Tick",
-  "cytra-areascanner.config.comment.blocksPerTick": "How many blocks the scanner checks per client tick.\nBig selections are scanned over several ticks; lower this if the game stutters while scanning.",
+  "cytra-areascanner.config.comment.blocksPerTick": "How many blocks the scanner checks per client tick when Background Scanning is off.\nLower this if the game stutters while scanning.",
   "cytra-areascanner.config.name.showHud": "Show HUD",
   "cytra-areascanner.config.prettyName.showHud": "Show HUD",
   "cytra-areascanner.config.comment.showHud": "Show the 'Scanner: X unmovable | Y liquids | Z custom' line and the scan progress bar.",
@@ -150,5 +150,8 @@
   "cytra-areascanner.group.unmovable": "Unmovable",
   "cytra-areascanner.group.liquid": "Liquids",
   "cytra-areascanner.group.custom": "Custom",
-  "cytra-areascanner.hotkeys.category.generic": "Hotkeys"
+  "cytra-areascanner.hotkeys.category.generic": "Hotkeys",
+  "cytra-areascanner.config.name.backgroundScanning": "Background Scanning",
+  "cytra-areascanner.config.prettyName.backgroundScanning": "Background Scanning",
+  "cytra-areascanner.config.comment.backgroundScanning": "Scan on worker threads: the game only copies chunk data, the blocks are checked in the background.\nOff: scan on the main thread, limited by Blocks Per Tick."
 }

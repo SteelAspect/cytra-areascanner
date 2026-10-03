@@ -22,8 +22,9 @@ Works in singleplayer and on any server; nothing is sent to the server.
 
 1. Make an area selection with Litematica (Normal or Simple mode; all boxes of the selection are scanned).
 2. Open Litematica's main menu (`M`) and click **Area Scanner** (under *Configuration menu*).
-3. Click **Scan**. Big selections are scanned over several ticks (see *Blocks Per Tick*); progress shows on the
-   HUD and in the screen's status line.
+3. Click **Scan**. By default the scan runs on background worker threads (*Background Scanning*): the game
+   only copies chunk data, the blocks are checked off-thread. With it off, the scan runs on the main thread over
+   several ticks (see *Blocks Per Tick*). Progress shows on the HUD and in the screen's status line.
 4. After the first scan the overlay updates live: blocks that change inside the selection are re-checked on the
    next tick, so destroyed or patched matches disappear and new ones appear. Nothing is rescanned every tick.
 5. **Stop scanning** clears the overlay and stops the live updates.
@@ -38,7 +39,7 @@ The selection is copied when you press Scan; press **Rescan** after editing the 
 |---|---|
 | Unmovable & Liquids | Group toggles, sub-toggles (block entities, sources only, waterlogged), colours, custom list on/off |
 | Rendering | Through walls, fill/outline on/off and alpha, line width, merge neighbours, render range, max rendered |
-| Scanner | Blocks per tick, HUD on/off and position, chat export limit |
+| Scanner | Background scanning, blocks per tick (main-thread mode), HUD on/off and position, chat export limit |
 | Hotkeys | All hotkeys (unbound by default) |
 | Custom List... | Add blocks by ID (autocomplete: Tab or click), add looked-at block, colour picker, toggle, remove |
 | Presets... | Save the groups + custom list under a name; load, overwrite, delete |
@@ -85,7 +86,8 @@ If your default Java isn't 21, point Gradle at a JDK 21 first, e.g. `JAVA_HOME=/
 ```
 
 Starts a client, creates a test world and checks scanning through a two-box selection, live updates, the custom
-list, settings changes, pending chunks, next match and the exports. Screenshots land in
+list, settings changes, pending chunks, next match and the exports, in both scanning modes. Also takes
+screenshots of every menu and runs a large-scan benchmark. Screenshots land in
 `build/run/clientGameTest/screenshots/`.
 
 ## Versions
@@ -102,7 +104,16 @@ list, settings changes, pending chunks, next match and the exports. Screenshots 
 
 ## Notes
 
-- Matches are stored in a `Long2ObjectOpenHashMap` keyed by `BlockPos.asLong()`.
+- Matches are stored in a `Long2ObjectOpenHashMap` keyed by `BlockPos.asLong()`, plus a per-section index.
+- Chunk sections whose block palette can't contain a match (e.g. only stone and dirt) are skipped without
+  reading their blocks.
+- Background scanning: palettes are copied on the main thread, scanned by worker threads, and the results applied
+  on the main thread. Blocks that change while a chunk is being scanned are re-checked against the live world,
+  and results from an outdated scan (settings changed, chunk reloaded, scan stopped) are discarded.
+- The overlay geometry is cached per 16x16x16 section; a change only rebuilds the affected sections, within a
+  small time budget per frame.
 - The overlay uses MaLiLib's render pipelines, the same ones Litematica's overlays use. Neighbouring matches of
   the same colour are merged into one shape (*Merge Neighbours*), which keeps large liquid areas cheap to draw.
+- Benchmark (`PerformanceGameTest`): a 1.3M block selection with ~104k water blocks scans in 3 ticks in the
+  background (10 ticks on the main thread) with no slow ticks or FPS drop; live updates still apply within a tick.
 - For very large match sets, lower *Render Range* / *Max Rendered Blocks* if the frame rate drops.
