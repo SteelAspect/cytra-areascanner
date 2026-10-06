@@ -16,7 +16,7 @@ out/
 .classpath
 .project
 .settings/
-bin/
+/bin/
 .vscode/
 
 # Built jars outside build/
@@ -24,8 +24,8 @@ bin/
 !gradle/wrapper/gradle-wrapper.jar
 
 # Personal config
-config/
-logs/
+/config/
+/logs/
 
 # OS
 .DS_Store
