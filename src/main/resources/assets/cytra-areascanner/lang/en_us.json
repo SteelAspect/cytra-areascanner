@@ -151,6 +151,10 @@
   "cytra-areascanner.group.liquid": "Liquids",
   "cytra-areascanner.group.custom": "Custom",
   "cytra-areascanner.hotkeys.category.generic": "Hotkeys",
+  "cytra-areascanner.config.name.enabled": "Enabled",
+  "cytra-areascanner.config.prettyName.enabled": "Enabled",
+  "cytra-areascanner.config.comment.enabled": "Master switch. Off: no scanning, no overlay, no HUD and the scan hotkeys do nothing.\nThe menu still opens so you can turn it back on.",
+  "cytra-areascanner.message.disabled": "Area Scanner is turned off (Scanner tab > Enabled)",
   "cytra-areascanner.config.name.backgroundScanning": "Background Scanning",
   "cytra-areascanner.config.prettyName.backgroundScanning": "Background Scanning",
   "cytra-areascanner.config.comment.backgroundScanning": "Scan on worker threads: the game only copies chunk data, the blocks are checked in the background.\nOff: scan on the main thread, limited by Blocks Per Tick."

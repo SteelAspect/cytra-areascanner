@@ -94,6 +94,18 @@ public class AreaScannerClientGameTest implements FabricClientGameTest {
             context.waitTicks(5);
             expect(context, "initial (background again)", 3, 3, 0);
 
+            // Master switch: off stops the scan and refuses new ones; on allows scanning again.
+            context.runOnClient(client -> Configs.ENABLED.setBooleanValue(false));
+            context.waitTicks(2);
+            context.runOnClient(client -> {
+                check("disabled: running scan stopped", !ScanManager.isActive());
+                check("disabled: start refused", !ScanManager.start());
+                Configs.ENABLED.setBooleanValue(true);
+                check("re-enabled: scan starts", ScanManager.start());
+            });
+            context.waitTicks(5);
+            expect(context, "after re-enable", 3, 3, 0);
+
             // Live updates: remove obsidian, add crying obsidian, drain the water. Bedrock never counts as unmovable.
             cmd(world, "setblock %s stone", o.offset(1, 0, 1));
             cmd(world, "setblock %s crying_obsidian", o.offset(2, 1, 2));

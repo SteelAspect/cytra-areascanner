@@ -20,7 +20,7 @@ public final class HudRenderer implements IRenderer {
     @Override
     public void onRenderGameOverlayPost(GuiContext ctx) {
         Minecraft mc = Minecraft.getInstance();
-        if (!Configs.SHOW_HUD.getBooleanValue() || !ScanManager.isActive() || mc.options.hideGui || mc.player == null) return;
+        if (!Configs.ENABLED.getBooleanValue() || !Configs.SHOW_HUD.getBooleanValue() || !ScanManager.isActive() || mc.options.hideGui || mc.player == null) return;
         int x = Configs.HUD_X.getIntegerValue();
         int y = Configs.HUD_Y.getIntegerValue();
         String line = StringUtils.translate(Reference.MOD_ID + ".hud.line",

@@ -97,7 +97,7 @@ public final class ScanRenderer implements IRenderer, MatchListener {
 
     @Override
     public void onRenderWorldLast(Matrix4f posMatrix, Matrix4f projMatrix) {
-        if (!ScanManager.isActive() || ScanManager.totalMatches() == 0) return;
+        if (!Configs.ENABLED.getBooleanValue() || !ScanManager.isActive() || ScanManager.totalMatches() == 0) return;
         boolean fill = Configs.RENDER_FILL.getBooleanValue();
         boolean outline = Configs.RENDER_OUTLINE.getBooleanValue();
         if (!fill && !outline) return;

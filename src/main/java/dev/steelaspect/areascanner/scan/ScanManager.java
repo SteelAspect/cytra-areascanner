@@ -147,6 +147,10 @@ public final class ScanManager {
     /** Starts a new scan of the active area selection. */
     public static boolean start() {
         Minecraft mc = Minecraft.getInstance();
+        if (!Configs.ENABLED.getBooleanValue()) {
+            InfoUtils.showGuiOrInGameMessage(Message.MessageType.WARNING, Reference.MOD_ID + ".message.disabled");
+            return false;
+        }
         if (mc.level == null) {
             InfoUtils.showGuiOrInGameMessage(Message.MessageType.ERROR, Reference.MOD_ID + ".message.no_world");
             return false;
@@ -216,6 +220,11 @@ public final class ScanManager {
 
     /** Settings changed: rescan the same boxes if the match rules changed, otherwise only colours changed. */
     public static void onSettingsChanged() {
+        if (!Configs.ENABLED.getBooleanValue() && active) {
+            stop(false);
+            version++;
+            return;
+        }
         boolean rulesChanged = Matcher.refresh();
         if (active && rulesChanged) {
             clearMatchesAndWork();
@@ -298,6 +307,11 @@ public final class ScanManager {
 
     public static void tick(Minecraft mc) {
         if (!active) return;
+        if (!Configs.ENABLED.getBooleanValue()) {
+            // switched off from outside the GUI (e.g. Cytra Hub): drop the scan
+            stop(false);
+            return;
+        }
         if (mc.level == null) {
             stop(false);
             return;

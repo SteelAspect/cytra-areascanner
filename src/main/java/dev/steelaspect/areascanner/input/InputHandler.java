@@ -64,7 +64,7 @@ public final class InputHandler implements IKeybindProvider, IHotkeyCallback {
     }
 
     private static boolean handleScanKeys(Minecraft mc, IKeybind key) {
-        if (mc.player == null) return false;
+        if (mc.player == null || !Configs.ENABLED.getBooleanValue()) return false;
         if (key == Configs.SCAN.getKeybind()) {
             ScanManager.start();
             return true;

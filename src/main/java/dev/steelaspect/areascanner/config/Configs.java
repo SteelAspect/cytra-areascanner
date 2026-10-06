@@ -28,6 +28,8 @@ public final class Configs implements IConfigHandler {
     private static final String PREFIX = Reference.MOD_ID + ".config";
 
     // --- Scanner ---
+    /** Master switch: off = no scanning, overlay, HUD or scan hotkeys (the menu still opens to turn it back on). */
+    public static final ConfigBoolean ENABLED = new ConfigBoolean("enabled", true).apply(PREFIX);
     public static final ConfigBoolean BACKGROUND_SCANNING = new ConfigBoolean("backgroundScanning", true).apply(PREFIX);
     public static final ConfigInteger BLOCKS_PER_TICK = new ConfigInteger("blocksPerTick", 32768, 1024, 1048576).apply(PREFIX);
     public static final ConfigBooleanHotkeyed SHOW_HUD = new ConfigBooleanHotkeyed("showHud", true, "").apply(PREFIX);
@@ -36,6 +38,7 @@ public final class Configs implements IConfigHandler {
     public static final ConfigInteger CHAT_EXPORT_LIMIT = new ConfigInteger("chatExportLimit", 30, 1, 1000).apply(PREFIX);
 
     public static final ImmutableList<IConfigBase> SCANNER = ImmutableList.of(
+            ENABLED,
             BACKGROUND_SCANNING,
             BLOCKS_PER_TICK,
             SHOW_HUD,
